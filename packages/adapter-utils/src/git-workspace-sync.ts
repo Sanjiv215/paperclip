@@ -12,7 +12,6 @@ export interface GitCommandResult {
 export interface GitWorkspaceSnapshot {
   headCommit: string;
   branchName: string | null;
-  /** Changed files and collapsed untracked directories, relative to the repository root. */
   overlayPaths: string[];
   deletedPaths: string[];
   ignoredPaths: string[];
@@ -202,12 +201,12 @@ export async function readGitWorkspaceSnapshot(localDir: string, includeReposito
       timeout: 10_000,
       maxBuffer: 1024 * 1024,
     }),
-    // New output trees can contain enough filenames to exhaust the scan
-    // buffer before archive exclusions apply. The overlay copier expands
-    // these directories with the same per-entry exclusions as individual files.
-    runExpensiveWorkspaceGit(localDir, ["ls-files", "--others", "--exclude-standard", "--directory", "--no-empty-directory", "-z"], "adapter_sync.untracked_files", {
+    // A generated output tree can exceed 1 MiB of filenames with only a few
+    // thousand files. Keep the explicit file snapshot (and a finite bound):
+    // collapsing directories would let later files enter the staging copy.
+    runExpensiveWorkspaceGit(localDir, ["ls-files", "--others", "--exclude-standard", "-z"], "adapter_sync.untracked_files", {
       timeout: 10_000,
-      maxBuffer: 1024 * 1024,
+      maxBuffer: 8 * 1024 * 1024,
     }),
     runExpensiveWorkspaceGit(localDir, ["diff", "--name-only", "-z", "--diff-filter=D", "HEAD", "--"], "adapter_sync.deleted_files", {
       timeout: 10_000,
@@ -235,7 +234,7 @@ export async function readGitWorkspaceSnapshot(localDir: string, includeReposito
   return {
     headCommit: headCommitResult.stdout.trim(),
     branchName: branchName && branchName !== "HEAD" ? branchName : null,
-    overlayPaths: [...new Set([...splitNul(overlayDiffResult.stdout), ...splitNul(untrackedResult.stdout).map((entry) => entry.replace(/\/+$/, "")),
+    overlayPaths: [...new Set([...splitNul(overlayDiffResult.stdout), ...splitNul(untrackedResult.stdout),
       ...repositories.flatMap((repo) => repo.snapshot.overlayPaths.map((entry) => `${repo.path}/${entry}`))])]
       .sort((left, right) => left.localeCompare(right)),
     deletedPaths: [...new Set([...splitNul(deletedResult.stdout),

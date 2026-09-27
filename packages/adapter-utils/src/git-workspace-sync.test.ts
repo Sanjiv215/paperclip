@@ -134,7 +134,7 @@ describe("git workspace sync", () => {
     expect(ignoredArgs).toEqual(["ls-files", "--others", "--ignored", "--exclude-standard", "--directory", "-z"]);
   });
 
-  it("snapshots a large untracked directory within the existing scan output limit", async () => {
+  it("snapshots a generated directory with more than 1 MiB of filenames", async () => {
     const rootDir = await mkdtemp(path.join(os.tmpdir(), "paperclip-git-large-untracked-"));
     cleanupDirs.push(rootDir);
     const repo = await createRepo(rootDir);
@@ -154,7 +154,19 @@ describe("git workspace sync", () => {
     }));
 
     const snapshot = await readGitWorkspaceSnapshot(repo);
-    expect(snapshot?.overlayPaths).toEqual(["storybook-output"]);
+    expect(snapshot?.overlayPaths).toEqual(
+      names.map((name) => `storybook-output/${name}`).sort((left, right) => left.localeCompare(right)),
+    );
+
+    // The larger allowance must still fail closed on an oversized snapshot.
+    for (let start = 5_000; start < 40_000; start += 100) {
+      await Promise.all(Array.from({ length: 100 }, (_, index) => writeFile(
+        path.join(generatedDir, `${"asset-".repeat(36)}${start + index}.js`), "",
+      )));
+    }
+    await expect(readGitWorkspaceSnapshot(repo)).rejects.toMatchObject({
+      code: "ERR_CHILD_PROCESS_STDIO_MAXBUFFER",
+    });
   }, 30_000);
 
   async function createRepo(rootDir: string): Promise<string> {

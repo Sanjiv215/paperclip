@@ -938,32 +938,12 @@ async function copySelectedWorkspaceEntries(input: {
   exclude: string[];
 }): Promise<void> {
   await fs.mkdir(input.targetDir, { recursive: true });
-  const copyEntry = async (relative: string): Promise<void> => {
-    if (shouldExcludePath(relative, input.exclude)) return;
-    const sourcePath = path.join(input.sourceDir, relative);
-    const sourceStats = await fs.lstat(sourcePath).catch((error: NodeJS.ErrnoException) => {
-      if (error.code === "ENOENT") return null;
-      throw error;
-    });
-    if (!sourceStats) return;
-    if (sourceStats.isDirectory()) {
-      // Git reports an untracked nested repository as one directory entry.
-      // Do not turn that boundary into a recursive copy of its metadata or
-      // private files. Managed project repositories have their own snapshots.
-      const nestedGit = await fs.lstat(path.join(sourcePath, ".git")).catch((error: NodeJS.ErrnoException) => {
-        if (error.code === "ENOENT") return null;
-        throw error;
-      });
-      if (nestedGit) return;
-      for (const entry of await fs.readdir(sourcePath)) {
-        await copyEntry(path.posix.join(relative, entry));
-      }
-      return;
-    }
-    // lstat keeps directory symlinks as links; never traverse their targets.
+  for (const relative of input.relativePaths) {
+    if (shouldExcludePath(relative, input.exclude)) continue;
+    const sourceStats = await fs.lstat(path.join(input.sourceDir, relative)).catch(() => null);
+    if (!sourceStats) continue;
     await copyWorkspaceEntry(input.sourceDir, input.targetDir, relative);
-  };
-  for (const relative of input.relativePaths) await copyEntry(relative);
+  }
 }
 
 function toBuffer(bytes: Buffer | Uint8Array | ArrayBuffer): Buffer {
