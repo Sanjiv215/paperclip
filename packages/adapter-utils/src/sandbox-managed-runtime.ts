@@ -931,22 +931,34 @@ export async function mirrorDirectory(
   }
 }
 
-async function copySelectedWorkspaceEntries(input: {
+interface WorkspaceSourceRoot {
   sourceDir: string;
+  dev: number;
+  ino: number;
+}
+
+async function captureWorkspaceSourceRoot(localDir: string): Promise<WorkspaceSourceRoot> {
+  const sourceDir = await fs.realpath(localDir);
+  const stats = await fs.lstat(sourceDir);
+  if (!stats.isDirectory()) throw new Error("Workspace overlay root is not a directory");
+  return { sourceDir, dev: stats.dev, ino: stats.ino };
+}
+
+async function copySelectedWorkspaceEntries(input: {
+  sourceRoot: WorkspaceSourceRoot;
   targetDir: string;
   relativePaths: string[];
   exclude: string[];
 }): Promise<void> {
   await fs.mkdir(input.targetDir, { recursive: true });
-  const rootStats = await fs.lstat(input.sourceDir);
-  if (!rootStats.isDirectory()) throw new Error("Workspace overlay root is not a directory");
-  const sourceDir = await fs.realpath(input.sourceDir);
+  const { sourceDir, dev, ino } = input.sourceRoot;
   const assertSourceRoot = async () => {
     const current = await fs.lstat(sourceDir);
-    if (!current.isDirectory() || current.dev !== rootStats.dev || current.ino !== rootStats.ino) {
+    if (!current.isDirectory() || current.dev !== dev || current.ino !== ino) {
       throw new Error("Workspace overlay root directory changed during staging");
     }
   };
+  await assertSourceRoot();
   for (const relative of input.relativePaths) {
     if (shouldExcludePath(relative, input.exclude)) continue;
     const sourcePath = path.join(sourceDir, relative);
@@ -1167,6 +1179,12 @@ export async function prepareSandboxManagedRuntime(input: {
   // span, because the teardown runs the restore inside that span.
   const runStepSpan = <T>(name: string, work: () => Promise<T>): Promise<T> =>
     input.runtimeSpan ? input.runtimeSpan(name, work) : work();
+
+  // Resolve an existing workspace alias once, before reading its snapshot.
+  // All subsequent work uses that root, so retargeting the alias cannot select
+  // another repository. Staging also verifies the captured directory identity.
+  const workspaceRoot = syncWorkspace ? await captureWorkspaceSourceRoot(input.workspaceLocalDir) : null;
+  if (workspaceRoot) input = { ...input, workspaceLocalDir: workspaceRoot.sourceDir };
 
   // The git enumeration (`git status --ignored`, the HEAD diffs, `ls-files`).
   // It reads git's own bookkeeping to decide what to include/exclude, so it is
@@ -1440,7 +1458,7 @@ export async function prepareSandboxManagedRuntime(input: {
                 : input.workspaceLocalDir;
               if (gitSnapshot) {
                 await copySelectedWorkspaceEntries({
-                  sourceDir: input.workspaceLocalDir,
+                  sourceRoot: workspaceRoot!,
                   targetDir: workspaceArchiveDir,
                   relativePaths: gitSnapshot.overlayPaths,
                   exclude: workspaceArchiveExclude,
