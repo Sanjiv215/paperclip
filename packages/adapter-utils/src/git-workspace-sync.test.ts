@@ -40,7 +40,7 @@ describe("git workspace sync", () => {
       if (!dir) continue;
       await rm(dir, { recursive: true, force: true }).catch(() => undefined);
     }
-  });
+  }, 30_000); // The output-limit fixture removes 40,000 files on teardown.
 
   it("delegates every host-side full-tree enumeration to the registered scheduler", async () => {
     const rootDir = await mkdtemp(path.join(os.tmpdir(), "paperclip-git-scheduler-hook-"));

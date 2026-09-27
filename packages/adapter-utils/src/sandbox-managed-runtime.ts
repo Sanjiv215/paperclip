@@ -938,11 +938,28 @@ async function copySelectedWorkspaceEntries(input: {
   exclude: string[];
 }): Promise<void> {
   await fs.mkdir(input.targetDir, { recursive: true });
+  const sourceDir = await fs.realpath(input.sourceDir);
   for (const relative of input.relativePaths) {
     if (shouldExcludePath(relative, input.exclude)) continue;
-    const sourceStats = await fs.lstat(path.join(input.sourceDir, relative)).catch(() => null);
-    if (!sourceStats) continue;
-    await copyWorkspaceEntry(input.sourceDir, input.targetDir, relative);
+    const sourcePath = path.join(sourceDir, relative);
+    const parentPath = path.dirname(sourcePath);
+    const assertParentDirectory = async () => {
+      // Git selected this path before staging. A replaced ancestor must not
+      // redirect the copy through a symlink, even to another workspace folder.
+      if (await fs.realpath(parentPath) !== parentPath) {
+        throw new Error(`Workspace overlay directory changed to a symlink: ${relative}`);
+      }
+    };
+    try {
+      await assertParentDirectory();
+      await fs.lstat(sourcePath);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") continue;
+      throw error;
+    }
+    await copyWorkspaceEntry(sourceDir, input.targetDir, relative);
+    // Do not upload the staged tree if an ancestor changed during the copy.
+    await assertParentDirectory();
   }
 }
 

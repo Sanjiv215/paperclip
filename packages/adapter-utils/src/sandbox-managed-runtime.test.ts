@@ -861,6 +861,7 @@ describe("sandbox managed runtime", () => {
     await writeFile(path.join(localWorkspaceDir, "untracked.txt"), "from local\n", "utf8");
     await mkdir(path.join(localWorkspaceDir, "drafts"));
     await writeFile(path.join(localWorkspaceDir, "drafts", "report.md"), "draft\n");
+    await symlink("report.md", path.join(localWorkspaceDir, "drafts", "report-link.md"));
     await writeFile(path.join(localWorkspaceDir, "node_modules", "cache.bin"), "do not upload\n", "utf8");
     await rm(path.join(localWorkspaceDir, "deleted.txt"));
 
@@ -944,6 +945,7 @@ describe("sandbox managed runtime", () => {
     expect(workspaceMembers).toContain("tracked.txt");
     expect(workspaceMembers).toContain("untracked.txt");
     expect(workspaceMembers).toContain("drafts/report.md");
+    expect(await readlink(path.join(remoteWorkspaceDir, "drafts", "report-link.md"))).toBe("report.md");
     expect(workspaceMembers).not.toContain("drafts/late.secret");
     expect(workspaceMembers).not.toContain("drafts/late.txt");
     expect(workspaceMembers).not.toContain("clean.txt");
@@ -1207,6 +1209,71 @@ describe("sandbox managed runtime", () => {
     expect(downloadMembers.some((entry) => entry === ".git" || entry.startsWith(".git/"))).toBe(false);
     expect(downloadMembers.some((entry) => entry === "node_modules" || entry.startsWith("node_modules/"))).toBe(false);
     expect(downloadMembers.some((entry) => entry.includes("/node_modules/") || entry.endsWith("/node_modules"))).toBe(false);
+  });
+
+  it.each(["symlink", "EACCES", "EIO", "ENOENT"])("handles an overlay source changed after the snapshot: %s", async (change) => {
+    const rootDir = await mkdtemp(path.join(os.tmpdir(), "paperclip-sandbox-overlay-source-"));
+    cleanupDirs.push(rootDir);
+    const workspaceLocalDir = path.join(rootDir, "workspace");
+    await initGitRepo(workspaceLocalDir);
+    const draftsDir = path.join(workspaceLocalDir, "drafts");
+    const selectedPath = path.join(draftsDir, "report.md");
+    await mkdir(draftsDir);
+    await writeFile(selectedPath, "selected work\n");
+    const outsideDir = path.join(rootDir, "outside");
+    await mkdir(outsideDir);
+    await writeFile(path.join(outsideDir, "report.md"), "private outside content\n");
+    const syncIn = vi.fn(async () => ({ operations: [] }));
+    const client: SandboxManagedRuntimeClient = {
+      makeDir: async () => {},
+      writeFile: async () => {},
+      readFile: async () => new ArrayBuffer(0),
+      listFiles: async () => [],
+      remove: async () => {},
+      run: async () => {},
+      syncIn,
+    };
+    const realLstat = fsPromises.lstat.bind(fsPromises);
+    const failure = Object.assign(new Error(`Cannot inspect overlay: ${change}`), { code: change });
+    let statSpy: ReturnType<typeof vi.spyOn> | undefined;
+    try {
+      const preparing = prepareSandboxManagedRuntime({
+        spec: {
+          transport: "sandbox",
+          provider: "test",
+          sandboxId: "sandbox-1",
+          remoteCwd: path.join(rootDir, "remote"),
+          timeoutMs: 30_000,
+          apiKey: null,
+        },
+        adapterKey: "test-adapter",
+        client,
+        workspaceLocalDir,
+        onRuntimeProgress: async (status) => {
+          if (status.phase !== "config_sync") return;
+          if (change === "symlink") {
+            await rm(draftsDir, { recursive: true });
+            await symlink(outsideDir, draftsDir);
+          } else if (change === "ENOENT") {
+            await rm(selectedPath);
+          } else {
+            statSpy = vi.spyOn(fsPromises, "lstat").mockImplementation((async (...args: Parameters<typeof fsPromises.lstat>) => {
+              if (args[0] === selectedPath) throw failure;
+              return realLstat(...args);
+            }) as typeof fsPromises.lstat);
+          }
+        },
+      });
+      if (change === "ENOENT") {
+        await preparing;
+        expect(syncIn).toHaveBeenCalledOnce();
+      } else {
+        await expect(preparing).rejects.toThrow(change === "symlink" ? /overlay.*directory/i : failure.message);
+        expect(syncIn).not.toHaveBeenCalled();
+      }
+    } finally {
+      statSpy?.mockRestore();
+    }
   });
 
   it("excludes an anchor-workspace ignored file whose name has leading and trailing whitespace from the staged tree", async () => {
