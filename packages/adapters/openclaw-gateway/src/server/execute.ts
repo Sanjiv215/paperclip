@@ -491,11 +491,17 @@ function joinWakePayloadSections(structuredWakePrompt: string, structuredWakeJso
 }
 
 export function extractAssistantChunk(data: Record<string, unknown>): string | null {
-  if (typeof data.delta === "string" && data.delta.length > 0) {
-    return data.delta;
+  const delta = typeof data.delta === "string" ? data.delta : null;
+  const text = typeof data.text === "string" ? data.text : null;
+
+  if (delta && delta.length > 0) {
+    if (delta.trim().length === 0 && text && text.trim().length > 0) {
+      return text;
+    }
+    return delta;
   }
-  if (typeof data.text === "string" && data.text.length > 0) {
-    return data.text;
+  if (text && text.length > 0) {
+    return text;
   }
   return null;
 }

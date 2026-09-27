@@ -141,6 +141,15 @@ describe("extractAssistantChunk", () => {
     expect(extractAssistantChunk({ text: " full text response" })).toBe(" full text response");
   });
 
+  it("falls back to text when delta is whitespace-only but text has non-whitespace content", () => {
+    expect(extractAssistantChunk({ delta: " ", text: "Done" })).toBe("Done");
+    expect(extractAssistantChunk({ delta: "   ", text: "Task completed" })).toBe("Task completed");
+  });
+
+  it("prefers non-whitespace delta even when text is also present", () => {
+    expect(extractAssistantChunk({ delta: " word", text: "full text" })).toBe(" word");
+  });
+
   it("returns null for empty strings or non-string values", () => {
     expect(extractAssistantChunk({ delta: "" })).toBeNull();
     expect(extractAssistantChunk({ text: "" })).toBeNull();
