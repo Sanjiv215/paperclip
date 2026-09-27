@@ -1211,7 +1211,7 @@ describe("sandbox managed runtime", () => {
     expect(downloadMembers.some((entry) => entry.includes("/node_modules/") || entry.endsWith("/node_modules"))).toBe(false);
   });
 
-  it.each(["symlink", "EACCES", "EIO", "ENOENT"])("handles an overlay source changed after the snapshot: %s", async (change) => {
+  it.each(["symlink", "case_alias", "EACCES", "EIO", "ENOENT"])("handles an overlay source changed after the snapshot: %s", async (change) => {
     const rootDir = await mkdtemp(path.join(os.tmpdir(), "paperclip-sandbox-overlay-source-"));
     cleanupDirs.push(rootDir);
     const workspaceLocalDir = path.join(rootDir, "workspace");
@@ -1234,8 +1234,10 @@ describe("sandbox managed runtime", () => {
       syncIn,
     };
     const realLstat = fsPromises.lstat.bind(fsPromises);
+    const realRealpath = fsPromises.realpath.bind(fsPromises);
     const failure = Object.assign(new Error(`Cannot inspect overlay: ${change}`), { code: change });
     let statSpy: ReturnType<typeof vi.spyOn> | undefined;
+    let realpathSpy: ReturnType<typeof vi.spyOn> | undefined;
     try {
       const preparing = prepareSandboxManagedRuntime({
         spec: {
@@ -1256,6 +1258,13 @@ describe("sandbox managed runtime", () => {
             await symlink(outsideDir, draftsDir);
           } else if (change === "ENOENT") {
             await rm(selectedPath);
+          } else if (change === "case_alias") {
+            // Model a case-insensitive filesystem: Git's indexed spelling
+            // still resolves, while realpath reports the directory's new case.
+            realpathSpy = vi.spyOn(fsPromises, "realpath").mockImplementation((async (...args: Parameters<typeof fsPromises.realpath>) => {
+              if (args[0] === draftsDir) return path.join(workspaceLocalDir, "Drafts");
+              return realRealpath(...args);
+            }) as typeof fsPromises.realpath);
           } else {
             statSpy = vi.spyOn(fsPromises, "lstat").mockImplementation((async (...args: Parameters<typeof fsPromises.lstat>) => {
               if (args[0] === selectedPath) throw failure;
@@ -1264,7 +1273,7 @@ describe("sandbox managed runtime", () => {
           }
         },
       });
-      if (change === "ENOENT") {
+      if (change === "ENOENT" || change === "case_alias") {
         await preparing;
         expect(syncIn).toHaveBeenCalledOnce();
       } else {
@@ -1273,6 +1282,7 @@ describe("sandbox managed runtime", () => {
       }
     } finally {
       statSpy?.mockRestore();
+      realpathSpy?.mockRestore();
     }
   });
 

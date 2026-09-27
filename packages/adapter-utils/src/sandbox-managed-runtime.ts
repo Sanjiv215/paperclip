@@ -942,12 +942,19 @@ async function copySelectedWorkspaceEntries(input: {
   for (const relative of input.relativePaths) {
     if (shouldExcludePath(relative, input.exclude)) continue;
     const sourcePath = path.join(sourceDir, relative);
-    const parentPath = path.dirname(sourcePath);
+    const parentSegments = path.relative(sourceDir, path.dirname(sourcePath)).split(path.sep).filter(Boolean);
     const assertParentDirectory = async () => {
       // Git selected this path before staging. A replaced ancestor must not
       // redirect the copy through a symlink, even to another workspace folder.
-      if (await fs.realpath(parentPath) !== parentPath) {
-        throw new Error(`Workspace overlay directory changed to a symlink: ${relative}`);
+      // Inspect types instead of comparing realpath spelling: case-insensitive
+      // filesystems can resolve Git's indexed casing to a renamed directory.
+      let parentPath = sourceDir;
+      for (const segment of parentSegments) {
+        if (segment === "..") throw new Error(`Workspace overlay directory escapes its root: ${relative}`);
+        parentPath = path.join(parentPath, segment);
+        if (!(await fs.lstat(parentPath)).isDirectory()) {
+          throw new Error(`Workspace overlay ancestor is not a directory: ${relative}`);
+        }
       }
     };
     try {
