@@ -938,7 +938,15 @@ async function copySelectedWorkspaceEntries(input: {
   exclude: string[];
 }): Promise<void> {
   await fs.mkdir(input.targetDir, { recursive: true });
+  const rootStats = await fs.lstat(input.sourceDir);
+  if (!rootStats.isDirectory()) throw new Error("Workspace overlay root is not a directory");
   const sourceDir = await fs.realpath(input.sourceDir);
+  const assertSourceRoot = async () => {
+    const current = await fs.lstat(sourceDir);
+    if (!current.isDirectory() || current.dev !== rootStats.dev || current.ino !== rootStats.ino) {
+      throw new Error("Workspace overlay root directory changed during staging");
+    }
+  };
   for (const relative of input.relativePaths) {
     if (shouldExcludePath(relative, input.exclude)) continue;
     const sourcePath = path.join(sourceDir, relative);
@@ -957,6 +965,9 @@ async function copySelectedWorkspaceEntries(input: {
         }
       }
     };
+    // Include root-level entries, and do not treat a missing root as an
+    // ordinary source file that disappeared after the snapshot.
+    await assertSourceRoot();
     try {
       await assertParentDirectory();
       await fs.lstat(sourcePath);
@@ -966,6 +977,7 @@ async function copySelectedWorkspaceEntries(input: {
     }
     await copyWorkspaceEntry(sourceDir, input.targetDir, relative);
     // Do not upload the staged tree if an ancestor changed during the copy.
+    await assertSourceRoot();
     await assertParentDirectory();
   }
 }

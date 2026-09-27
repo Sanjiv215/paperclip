@@ -1211,13 +1211,13 @@ describe("sandbox managed runtime", () => {
     expect(downloadMembers.some((entry) => entry.includes("/node_modules/") || entry.endsWith("/node_modules"))).toBe(false);
   });
 
-  it.each(["symlink", "case_alias", "EACCES", "EIO", "ENOENT"])("handles an overlay source changed after the snapshot: %s", async (change) => {
+  it.each(["symlink", "root_symlink", "case_alias", "EACCES", "EIO", "ENOENT"])("handles an overlay source changed after the snapshot: %s", async (change) => {
     const rootDir = await mkdtemp(path.join(os.tmpdir(), "paperclip-sandbox-overlay-source-"));
     cleanupDirs.push(rootDir);
     const workspaceLocalDir = path.join(rootDir, "workspace");
     await initGitRepo(workspaceLocalDir);
     const draftsDir = path.join(workspaceLocalDir, "drafts");
-    const selectedPath = path.join(draftsDir, "report.md");
+    const selectedPath = path.join(change === "root_symlink" ? workspaceLocalDir : draftsDir, "report.md");
     await mkdir(draftsDir);
     await writeFile(selectedPath, "selected work\n");
     const outsideDir = path.join(rootDir, "outside");
@@ -1265,6 +1265,15 @@ describe("sandbox managed runtime", () => {
               if (args[0] === draftsDir) return path.join(workspaceLocalDir, "Drafts");
               return realRealpath(...args);
             }) as typeof fsPromises.realpath);
+          } else if (change === "root_symlink") {
+            realpathSpy = vi.spyOn(fsPromises, "realpath").mockImplementation((async (...args: Parameters<typeof fsPromises.realpath>) => {
+              const resolved = await realRealpath(...args);
+              if (args[0] === workspaceLocalDir) {
+                await fsPromises.rename(workspaceLocalDir, path.join(rootDir, "original-workspace"));
+                await symlink(outsideDir, workspaceLocalDir);
+              }
+              return resolved;
+            }) as typeof fsPromises.realpath);
           } else {
             statSpy = vi.spyOn(fsPromises, "lstat").mockImplementation((async (...args: Parameters<typeof fsPromises.lstat>) => {
               if (args[0] === selectedPath) throw failure;
@@ -1277,7 +1286,7 @@ describe("sandbox managed runtime", () => {
         await preparing;
         expect(syncIn).toHaveBeenCalledOnce();
       } else {
-        await expect(preparing).rejects.toThrow(change === "symlink" ? /overlay.*directory/i : failure.message);
+        await expect(preparing).rejects.toThrow(change.endsWith("symlink") ? /overlay.*directory/i : failure.message);
         expect(syncIn).not.toHaveBeenCalled();
       }
     } finally {
