@@ -134,6 +134,29 @@ describe("git workspace sync", () => {
     expect(ignoredArgs).toEqual(["ls-files", "--others", "--ignored", "--exclude-standard", "--directory", "-z"]);
   });
 
+  it("snapshots a large untracked directory within the existing scan output limit", async () => {
+    const rootDir = await mkdtemp(path.join(os.tmpdir(), "paperclip-git-large-untracked-"));
+    cleanupDirs.push(rootDir);
+    const repo = await createRepo(rootDir);
+    const generatedDir = path.join(repo, "storybook-output");
+    await mkdir(generatedDir);
+    const names = Array.from({ length: 5_000 }, (_, index) => `${"asset-".repeat(36)}${index}.js`);
+    for (let start = 0; start < names.length; start += 100) {
+      await Promise.all(names.slice(start, start + 100).map((name) => writeFile(path.join(generatedDir, name), "")));
+    }
+    const raw = await runLocalGit(repo, ["ls-files", "--others", "--exclude-standard", "-z"], {
+      maxBuffer: 2 * 1024 * 1024,
+    });
+    expect(Buffer.byteLength(raw.stdout)).toBeGreaterThan(1024 * 1024);
+    setExpensiveWorkspaceGitExecutor((input) => runLocalGit(input.localDir, [...input.args], {
+      timeout: input.timeout,
+      maxBuffer: input.maxBuffer,
+    }));
+
+    const snapshot = await readGitWorkspaceSnapshot(repo);
+    expect(snapshot?.overlayPaths).toEqual(["storybook-output"]);
+  }, 30_000);
+
   async function createRepo(rootDir: string): Promise<string> {
     const repo = path.join(rootDir, "repo");
     await mkdir(repo, { recursive: true });

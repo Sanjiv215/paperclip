@@ -860,6 +860,18 @@ describe("sandbox managed runtime", () => {
     await writeFile(path.join(localWorkspaceDir, "tracked.txt"), "dirty local\n", "utf8");
     await writeFile(path.join(localWorkspaceDir, "untracked.txt"), "from local\n", "utf8");
     await writeFile(path.join(localWorkspaceDir, "node_modules", "cache.bin"), "do not upload\n", "utf8");
+    // A collapsed untracked directory must still carry its files and apply
+    // exclusions at every depth, without following links or nested Git roots.
+    const drafts = path.join(localWorkspaceDir, "drafts");
+    await mkdir(path.join(drafts, "nested"), { recursive: true });
+    await mkdir(path.join(drafts, "build"));
+    await writeFile(path.join(drafts, ".gitignore"), "*.secret\n");
+    await writeFile(path.join(drafts, "nested", " report.md "), "draft body\n");
+    await writeFile(path.join(drafts, "nested", "token.secret"), "do not upload\n");
+    await writeFile(path.join(drafts, "build", "generated.js"), "do not upload\n");
+    await symlink("nested/ report.md ", path.join(drafts, "report-link"));
+    await initGitRepo(path.join(drafts, "other-repo"));
+    await writeFile(path.join(drafts, "other-repo", "private.txt"), "do not upload\n");
     await rm(path.join(localWorkspaceDir, "deleted.txt"));
 
     const uploadedTars: { remotePath: string; bytes: Buffer }[] = [];
@@ -936,6 +948,13 @@ describe("sandbox managed runtime", () => {
     expect(workspaceMembers.some((entry) => entry === ".git" || entry.startsWith(".git/"))).toBe(false);
     expect(workspaceMembers).toContain("tracked.txt");
     expect(workspaceMembers).toContain("untracked.txt");
+    await expect(readFile(path.join(remoteWorkspaceDir, "drafts", "nested", " report.md "), "utf8"))
+      .resolves.toBe("draft body\n");
+    await expect(readlink(path.join(remoteWorkspaceDir, "drafts", "report-link")))
+      .resolves.toBe("nested/ report.md ");
+    expect(workspaceMembers.some((entry) => entry.includes("token.secret"))).toBe(false);
+    expect(workspaceMembers.some((entry) => entry.includes("generated.js"))).toBe(false);
+    expect(workspaceMembers.some((entry) => entry.includes("other-repo/"))).toBe(false);
     expect(workspaceMembers).not.toContain("clean.txt");
     expect(workspaceMembers.some((entry) => entry === "node_modules" || entry.startsWith("node_modules/"))).toBe(false);
 
